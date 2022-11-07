@@ -1,5 +1,8 @@
+from dataclasses import dataclass, field
 import sys
 import math
+
+from typing import List, Tuple
 
 import numpy as np
 import Box2D
@@ -115,6 +118,250 @@ class ContactDetector(contactListener):
                 leg.ground_contact = False
 
 
+#TODO: QD ~ a sequence of tiles of fixed length, static tile width, randomly sample charactrisitcs of
+# each tile according to the validation rules
+
+
+@dataclass
+class MapTile:
+    GRASS, STUMP, STAIRS, PIT, _STATES_ = range(5)
+    state: int = _STATES_
+    length: int = 0
+    heights: List[float] = field(default_factory=list)
+    polys: List[List[Tuple[float]]] = field(default_factory=list)
+    start_x: float = 0.0
+    start_y: float = 0.0
+    end_x: float = 0.0
+    end_y: float = 0.0
+
+    def sample(self):
+        pass
+
+    def reset(self):
+        self.length= 0
+        self.heights = []
+        self.polys = []
+        self.start_x = []
+        self.start_y = 0.0
+        self.end_x = 0.0
+        self.end_y = 0.0
+
+    def validate(self):
+        assert len(self.heights) == self.length, f"Mismatched y coors ({len(self.heights)}) and length {self.length}"
+        return True
+
+    def calc_dims(fn):
+        def wrapper(self, start_pos=0, start_height=TERRAIN_HEIGHT) -> Tuple[float, float]:
+            self.start_x = start_pos
+            self.start_y = start_height
+            fn(self)
+            self.end_x = self.start_x + (self.length * TERRAIN_STEP)
+            self.end_y = self.heights[-1]
+            #print(f"Starts at ({self.start_x}, {self.start_y}), ends at ({self.end_x}, {self.end_y})")
+            return (self.end_x, self.end_y)
+        return wrapper
+
+
+@dataclass
+class GrassTile(MapTile):
+    state: int = MapTile.GRASS
+
+    @MapTile.calc_dims
+    def sample(self):
+        self.length = np.random.randint(TERRAIN_GRASS / 2, TERRAIN_GRASS)
+        y = self.start_y
+        velocity = 0.0
+        for _ in range(self.length):
+            velocity = 0.8 * velocity + 0.01 * np.sign(TERRAIN_HEIGHT - y)
+            velocity += np.random.uniform(-1, 1) / SCALE  # 1
+            y += velocity
+            self.heights.append(y)
+
+    def validate(self):
+        super().validate()
+        return True
+
+@dataclass
+class PitTile(MapTile):
+    state: int = MapTile.PIT
+
+    @MapTile.calc_dims
+    def sample(self):
+        self.length = np.random.randint(3, 5)
+        x = self.start_x
+        y = self.start_y
+        poly = [
+            (x, y),
+            (x + TERRAIN_STEP, y),
+            (x + TERRAIN_STEP, y - 4 * TERRAIN_STEP),
+            (x, y - 4 * TERRAIN_STEP),
+        ]
+        self.polys = [
+            poly,
+            [(p[0] + TERRAIN_STEP * self.length, p[1]) for p in poly]
+        ]
+        self.length += 2
+        self.heights.append(self.start_y)
+
+        for i in range(self.length, 2, -1):
+            print(i)
+            y = self.start_y
+            self.heights.append(y - 4 * TERRAIN_STEP)
+
+        self.heights.append(self.start_y)
+
+    def validate(self):
+        super().validate()
+        return True
+
+@dataclass
+class StairsTile(MapTile):
+    state: int = MapTile.STAIRS
+    stair_height: int = 0
+    stair_width: int = 0
+    stair_steps: int = 0
+
+    @MapTile.calc_dims
+    def sample(self):
+        self.stair_height = +1 if np.random.rand() > 0.5 else -1
+        self.stair_width = np.random.randint(4, 5)
+        self.stair_steps = np.random.randint(3, 5)
+        x = self.start_x
+        y = self.start_y
+        for s in range(self.stair_steps):
+            poly = [
+                (
+                    x + (s * self.stair_width) * TERRAIN_STEP,
+                    y + (s * self.stair_height) * TERRAIN_STEP,
+                ),
+                (
+                    x + ((1 + s) * self.stair_width) * TERRAIN_STEP,
+                    y + (s * self.stair_height) * TERRAIN_STEP,
+                ),
+                (
+                    x + ((1 + s) * self.stair_width) * TERRAIN_STEP,
+                    y + (-1 + s * self.stair_height) * TERRAIN_STEP,
+                ),
+                (
+                    x + (s * self.stair_width) * TERRAIN_STEP,
+                    y + (-1 + s * self.stair_height) * TERRAIN_STEP,
+                ),
+            ]
+            self.polys.append(poly)
+
+        self._set_length()
+
+        self.heights.append(y)
+        for l in range(self.length + 1, 2, -1):
+            s = self.stair_steps * self.stair_width - l - self.stair_height
+            n = s / self.stair_width
+            y = self.start_y + (n * self.stair_height) * TERRAIN_STEP
+            self.heights.append(y)
+
+    def validate(self):
+        super().validate()
+        assert self.stair_height == 1 or self.stair_height == -1, "Stairs must go up (stair_height: 1) or down(stair_height: -1)"
+        assert 4 <= self.stair_width < 5, "Stair width must be between [4,5]"
+        assert 3 <= self.stair_steps < 5, "Number of steps must be between [3,5]"
+        assert len(self.polys) == self.stair_steps, "Num polygons does not match number of steps"
+        return True
+
+    def _set_length(self):
+        self.length = self.stair_steps * self.stair_width
+
+@dataclass
+class StartTile(GrassTile):
+
+    @MapTile.calc_dims
+    def sample(self):
+        self.length = TERRAIN_STARTPAD
+        y = self.start_y
+        velocity = 0.0
+        for _ in range(self.length):
+            velocity = 0.8 * velocity + 0.01 * np.sign(TERRAIN_HEIGHT - y)
+            y += velocity
+            self.heights.append(y)
+
+    def validate(self):
+        assert len(self.heights) == self.length, "Not enough y coors for specified length"
+        assert len(self.heights) == TERRAIN_STARTPAD, "Y coors need to match start pad length"
+        return True
+
+@dataclass
+class StumpTile(MapTile):
+    state: int = MapTile.STUMP
+
+    @MapTile.calc_dims
+    def sample(self):
+        self.length = np.random.randint(1, 3)
+        x = self.start_x
+        y = self.start_y
+        poly = [
+            (x, y),
+            (x + self.length * TERRAIN_STEP, y),
+            (x + self.length * TERRAIN_STEP, y + self.length * TERRAIN_STEP),
+            (x, y + self.length * TERRAIN_STEP),
+        ]
+        self.polys = [poly]
+        self.heights = [y] * self.length
+
+    def validate(self):
+        super().validate()
+        assert 1 <= self.length < 3, "Length must be [1,3)"
+        assert len(self.polys) == 1, "There should only be one polygon"
+        return True
+
+@dataclass
+class Map:
+    tiles: List[MapTile]
+
+    def reset(self):
+        [t.reset() for t in self.tiles]
+
+    def sample(self):
+        x, y = (0.0, TERRAIN_HEIGHT)
+        for t in self.tiles:
+            x, y = t.sample(start_pos=x, start_height=y)
+
+        curr_map_len = sum([t.length for t in self.tiles])
+        if curr_map_len <= TERRAIN_LENGTH:
+            self.tiles.append(GrassTile(
+                length=(TERRAIN_LENGTH - curr_map_len),
+                heights=[y] * (TERRAIN_LENGTH - curr_map_len),
+                polys=[],
+                start_x=x,
+                start_y=y,
+                end_x=x + TERRAIN_STEP * (TERRAIN_LENGTH - curr_map_len),
+                end_y=y
+            ))
+        assert(self.validate())
+
+    def validate(self):
+        assert isinstance(self.tiles[0], StartTile)
+        assert all([t.validate() for t in self.tiles])
+        assert sum([t.length for t in self.tiles]) == TERRAIN_LENGTH
+        # Validate that there is a grass tile between any two obstacles
+        prev_state_was_grass = True
+        for t in self.tiles:
+            if t.state != MapTile.GRASS and prev_state_was_grass == False:
+                raise ValueError("Obstacles must be surrounded by grass")
+            elif t.state != MapTile.GRASS and prev_state_was_grass == True:
+                prev_state_was_grass = False
+            elif t.state == MapTile.GRASS:
+                prev_state_was_grass = True
+        return True
+
+TileMap = {
+  MapTile.GRASS: GrassTile,
+  MapTile.PIT: PitTile,
+  MapTile.STAIRS: StairsTile,
+  MapTile.STUMP: StumpTile,
+}
+
+def gen_map(sequence: List[int]) -> List[MapTile]:
+    assert(all([t in TileMap for t in sequence]))
+    return [StartTile()] + [TileMap[t]() for t in sequence]
+
 class BipedalWalker(gym.Env, EzPickle):
     metadata = {"render.modes": ["human", "rgb_array"], "video.frames_per_second": FPS}
 
@@ -167,7 +414,7 @@ class BipedalWalker(gym.Env, EzPickle):
         self.legs = []
         self.joints = []
 
-    def _generate_terrain(self, hardcore):
+    def _generate_terrain(self, hardcore, map: Map = None):
         GRASS, STUMP, STAIRS, PIT, _STATES_ = range(5)
         state = GRASS
         velocity = 0.0
@@ -291,6 +538,64 @@ class BipedalWalker(gym.Env, EzPickle):
             self.terrain_poly.append((poly, color))
         self.terrain.reverse()
 
+    def _generate_terrain_from_map(self, map: Map):
+        GRASS, STUMP, STAIRS, PIT, _STATES_ = range(5)
+
+        first_pass_on_tile = False
+        self.terrain = []
+        self.terrain_x = []
+        self.terrain_y = []
+
+        tiles = iter(map.tiles)
+        tile = next(tiles)
+        counter = tile.length
+        state = tile.state
+        y = tile.heights[0]
+
+        for i in range(TERRAIN_LENGTH):
+            x = i * TERRAIN_STEP
+            self.terrain_x.append(x)
+
+            y = tile.heights[len(tile.heights) - counter]
+
+            if first_pass_on_tile:
+                for p in tile.polys:
+                    self.fd_polygon.shape.vertices = p
+                    t = self.world.CreateStaticBody(fixtures=self.fd_polygon)
+                    t.color1, t.color2 = (1, 1, 1), (0.6, 0.6, 0.6)
+                    self.terrain.append(t)
+
+            first_pass_on_tile = False
+            self.terrain_y.append(y)
+            counter -= 1
+            if counter == 0:
+                try:
+                    tile = next(tiles)
+                except:
+                    break
+                counter = tile.length
+                first_pass_on_tile = True
+
+
+        assert(len(self.terrain_x) == len(self.terrain_y))
+        assert(len(self.terrain_x) == TERRAIN_LENGTH)
+        self.terrain_poly = []
+        for i in range(TERRAIN_LENGTH - 1):
+            poly = [
+                (self.terrain_x[i], self.terrain_y[i]),
+                (self.terrain_x[i + 1], self.terrain_y[i + 1]),
+            ]
+            self.fd_edge.shape.vertices = poly
+            t = self.world.CreateStaticBody(fixtures=self.fd_edge)
+            color = (0.3, 1.0 if i % 2 == 0 else 0.8, 0.3)
+            t.color1 = color
+            t.color2 = color
+            self.terrain.append(t)
+            color = (0.4, 0.6, 0.3)
+            poly += [(poly[1][0], 0), (poly[0][0], 0)]
+            self.terrain_poly.append((poly, color))
+        self.terrain.reverse()
+
     def _generate_clouds(self):
         # Sorry for the clouds, couldn't resist
         self.cloud_poly = []
@@ -312,7 +617,7 @@ class BipedalWalker(gym.Env, EzPickle):
             x2 = max([p[0] for p in poly])
             self.cloud_poly.append((poly, x1, x2))
 
-    def reset(self):
+    def reset(self, map: Map=None):
         self._destroy()
         self.world.contactListener_bug_workaround = ContactDetector(self)
         self.world.contactListener = self.world.contactListener_bug_workaround
@@ -324,7 +629,11 @@ class BipedalWalker(gym.Env, EzPickle):
         W = VIEWPORT_W / SCALE
         H = VIEWPORT_H / SCALE
 
-        self._generate_terrain(self.hardcore)
+        if map is not None:
+            self._generate_terrain_from_map(map)
+        else:
+            self._generate_terrain(self.hardcore)
+
         self._generate_clouds()
 
         init_x = TERRAIN_STEP * TERRAIN_STARTPAD / 2
