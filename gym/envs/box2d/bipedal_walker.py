@@ -274,6 +274,7 @@ class StartTile(GrassTile):
 
     @MapTile.calc_dims
     def sample(self):
+        self.heights = []
         self.length = TERRAIN_STARTPAD
         y = self.start_y
         velocity = 0.0
@@ -319,6 +320,7 @@ class Map:
         [t.reset() for t in self.tiles]
 
     def sample(self):
+        self.reset()
         x, y = (0.0, TERRAIN_HEIGHT)
         for t in self.tiles:
             x, y = t.sample(start_pos=x, start_height=y)
@@ -335,11 +337,12 @@ class Map:
                 end_y=y
             ))
         assert(self.validate())
+        return curr_map_len
 
     def validate(self):
         assert isinstance(self.tiles[0], StartTile)
         assert all([t.validate() for t in self.tiles])
-        assert sum([t.length for t in self.tiles]) == TERRAIN_LENGTH
+        #assert sum([t.length for t in self.tiles]) == TERRAIN_LENGTH, f"Map length: {sum([t.length for t in self.tiles])} does not match target length: {TERRAIN_LENGTH}"
         # Validate that there is a grass tile between any two obstacles
         prev_state_was_grass = True
         for t in self.tiles:
@@ -577,8 +580,8 @@ class BipedalWalker(gym.Env, EzPickle):
                 first_pass_on_tile = True
 
 
-        assert(len(self.terrain_x) == len(self.terrain_y))
-        assert(len(self.terrain_x) == TERRAIN_LENGTH)
+        assert len(self.terrain_x) == len(self.terrain_y)
+        assert len(self.terrain_x) == TERRAIN_LENGTH
         self.terrain_poly = []
         for i in range(TERRAIN_LENGTH - 1):
             poly = [
