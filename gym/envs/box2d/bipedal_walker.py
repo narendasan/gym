@@ -161,6 +161,7 @@ class MapTile:
             return (self.end_x, self.end_y)
         return wrapper
 
+#TODO: Add a padding grass tile which cannot be sampled but ensures that obstacles can be solved.
 
 @dataclass
 class GrassTile(MapTile):
@@ -340,6 +341,7 @@ class Map:
         return curr_map_len
 
     def validate(self):
+        # TODO: Resample if invalid.
         assert isinstance(self.tiles[0], StartTile)
         assert all([t.validate() for t in self.tiles])
         #assert sum([t.length for t in self.tiles]) == TERRAIN_LENGTH, f"Map length: {sum([t.length for t in self.tiles])} does not match target length: {TERRAIN_LENGTH}"
@@ -354,7 +356,7 @@ class Map:
                 prev_state_was_grass = True
         return True
 
-TileMap = {
+TileTypes = {
   MapTile.GRASS: GrassTile,
   MapTile.PIT: PitTile,
   MapTile.STAIRS: StairsTile,
@@ -362,8 +364,8 @@ TileMap = {
 }
 
 def gen_map(sequence: List[int]) -> List[MapTile]:
-    assert(all([t in TileMap for t in sequence]))
-    return [StartTile()] + [TileMap[t]() for t in sequence]
+    assert(all([t in TileTypes for t in sequence]))
+    return [StartTile()] + [TileTypes[t]() for t in sequence]
 
 class BipedalWalker(gym.Env, EzPickle):
     metadata = {"render.modes": ["human", "rgb_array"], "video.frames_per_second": FPS}
@@ -398,6 +400,7 @@ class BipedalWalker(gym.Env, EzPickle):
             np.array([1, 1, 1, 1]).astype(np.float32),
         )
         self.observation_space = spaces.Box(-high, high)
+        self.env_map = None
 
     def seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
@@ -620,7 +623,11 @@ class BipedalWalker(gym.Env, EzPickle):
             x2 = max([p[0] for p in poly])
             self.cloud_poly.append((poly, x1, x2))
 
-    def reset(self, map: Map=None):
+    def resample_map(self):
+        self.env_map.reset()
+        self.env_map.sample()
+
+    def reset(self):
         self._destroy()
         self.world.contactListener_bug_workaround = ContactDetector(self)
         self.world.contactListener = self.world.contactListener_bug_workaround
@@ -632,8 +639,10 @@ class BipedalWalker(gym.Env, EzPickle):
         W = VIEWPORT_W / SCALE
         H = VIEWPORT_H / SCALE
 
-        if map is not None:
-            self._generate_terrain_from_map(map)
+        print(self.env_map)
+
+        if self.env_map is not None:
+            self._generate_terrain_from_map(self.env_map)
         else:
             self._generate_terrain(self.hardcore)
 
@@ -883,6 +892,13 @@ class BipedalWalker(gym.Env, EzPickle):
 
 class BipedalWalkerHardcore(BipedalWalker):
     hardcore = True
+
+class BipedalWalkerHardcoreMapGene(BipedalWalker):
+    hardcore = False
+
+    def __init__(self, env_map=None):
+        super().__init__()
+        self.env_map = env_map
 
 
 if __name__ == "__main__":
